@@ -1,0 +1,16 @@
+import enum
+
+class BookingStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    SAMPLE_COLLECTED = "SAMPLE_COLLECTED"
+    REPORT_GENERATED = "REPORT_GENERATED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    REFUNDED = "REFUNDED"

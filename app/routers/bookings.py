@@ -1,9 +1,12 @@
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import List
 from app.database import get_db
-from app import models, schemas
+from app import schemas, models
 from app.auth import get_current_user
+from app.services.booking_service import BookingService
+from app.repositories.booking_repo import BookingRepository
+from app.constants.enums import BookingStatus
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
@@ -13,40 +16,16 @@ def create_booking(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Verify centre offers this test and get the exact price
-    centre_test = db.query(models.CentreTest).filter(
-        models.CentreTest.centre_id == booking_data.centre_id,
-        models.CentreTest.test_id == booking_data.test_id
-    ).first()
-
-    if not centre_test:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The selected diagnostic centre does not offer this test."
-        )
-
-    # 2. Create the booking with status PENDING
-    new_booking = models.Booking(
-        user_id=current_user.id,
-        centre_id=booking_data.centre_id,
-        test_id=booking_data.test_id,
-        appointment_time=booking_data.appointment_time,
-        amount=centre_test.price,
-        status=models.BookingStatus.PENDING
-    )
-    db.add(new_booking)
-    db.commit()
-    db.refresh(new_booking)
-    return new_booking
+    service = BookingService(db)
+    return service.create_multi_test_booking(current_user.id, booking_data)
 
 @router.get("/", response_model=List[schemas.BookingResponse])
 def get_user_bookings(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # Only return bookings that belong to this logged-in user
-    bookings = db.query(models.Booking).filter(models.Booking.user_id == current_user.id).all()
-    return bookings
+    repo = BookingRepository(db)
+    return repo.get_by_user(current_user.id)
 
 @router.get("/{booking_id}", response_model=schemas.BookingResponse)
 def get_booking_detail(
@@ -54,20 +33,24 @@ def get_booking_detail(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
-    
-    # Edge case: Booking does not exist
+    repo = BookingRepository(db)
+    booking = repo.get_by_id(booking_id)
     if not booking:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Booking with id {booking_id} not found"
-        )
-    
-    # Edge case: Unauthorized user trying to view someone else's booking
+        raise HTTPException(status_code=404, detail="Booking not found.")
     if booking.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this booking"
-        )
-
+        raise HTTPException(status_code=403, detail="Forbidden: You do not own this booking.")
     return booking
+
+@router.patch("/{booking_id}/status", response_model=schemas.BookingResponse)
+def update_status(
+    booking_id: int,
+    status_update: schemas.BookingStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Enforces state transition machine: PENDING -> CONFIRMED -> SAMPLE_COLLECTED -> REPORT_GENERATED -> COMPLETED
+    repo = BookingRepository(db)
+    booking = repo.get_by_id(booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found.")
+    return repo.update_status(booking, status_update.status.value)
