@@ -1,36 +1,67 @@
-# EVE Healthcare - SDE Intern Backend Service
+# EVE Healthcare - Diagnostic Centre Booking & Payment Service
 
-A backend service built with **FastAPI** and **SQLAlchemy** for diagnostic test bookings, mock payments, and idempotent webhook event processing.
-
----
-
-## Architecture & System Design
-
-### 1. Database Schema
-- **`users`**: Stores user authentication credentials (`id`, `name`, `email`, `password_hash`).
-- **`centres`**: Diagnostic centres (`id`, `name`, `location`).
-- **`tests`**: Diagnostic test catalogue (`id`, `name`, `description`).
-- **`centre_tests`**: Join table mapping tests available at specific centres and their assigned `price`.
-- **`bookings`**: Booking lifecycle records (`id`, `user_id`, `centre_id`, `test_id`, `appointment_time`, `amount`, `status`, `created_at`).
-  - Supported statuses: `PENDING`, `CONFIRMED`, `FAILED`, `CANCELLED`.
-- **`webhook_events`**: Tracks incoming gateway events with a `UNIQUE` constraint on `event_id` to guarantee idempotent execution.
-
-### 2. Webhook Idempotency Strategy
-Payment providers guarantee *at-least-once* delivery, leading to duplicate event dispatches during network retries.
-- Incoming webhook requests to `POST /payments/webhook/` are checked against `webhook_events.event_id`.
-- If the event exists, the API returns `200 OK` immediately without mutating booking state.
-- If new, the event is recorded and the booking state transitions accordingly in a single database transaction.
+A production-grade backend service built with **FastAPI**, **SQLAlchemy ORM**, **PostgreSQL**, and clean layered architecture (Controller -> Service -> Repository).
 
 ---
 
-## Local Setup & Run
+## 1. End-to-End Happy Flow Diagram
 
-### Prerequisites
-- Python 3.10+ installed
+```text
+========================================================================================================
+                                      DIAGNOSTIC TEST BOOKING HAPPY FLOW
+========================================================================================================
 
-### Steps
-
-1. **Clone the repository:**
-   ```bash
-   git clone <your-repo-url>
-   cd eve-healthcare
+  [ PATIENT ]                   [ FASTAPI API ]              [ SERVICE / REPO ]         [ GATEWAY / DB ]
+       |                               |                              |                         |
+  1.   |--- POST /auth/signup -------->|                              |                         |
+       |<-- 201 Created (User Data) ---|                              |                         |
+       |                               |                              |                         |
+  2.   |--- POST /auth/login --------->|                              |                         |
+       |<-- 200 OK (JWT Access Token) -|                              |                         |
+       |                               |                              |                         |
+  3.   |--- GET /centres ------------->|                              |                         |
+       |<-- 200 OK (List of Centres) --| (Cached with In-Memory TTL)  |                         |
+       |                               |                              |                         |
+  4.   |--- GET /centres/{id} -------->|                              |                         |
+       |<-- 200 OK (Tests & Prices) ---|                              |                         |
+       |                               |                              |                         |
+  5.   |--- POST /bookings/ ---------->|                              |                         |
+       |    {                          |--- BookingService ---------->|                         |
+       |      "centre_id": 1,          |    .create_multi_test()      |--- CentreRepository --->|
+       |      "test_ids": [1, 2],      |                              |    (Verify Test IDs)    |
+       |      "appointment_time": ...  |                              |                         |
+       |    }                          |                              |--- BookingRepository -->|
+       |                               |                              |    (Insert Booking &    |
+       |                               |                              |     BookingItems)       |
+       |<-- 201 Created (PENDING) -----|                              |<------------------------|
+       |                               |                              |                         |
+       |  ======================== PAYMENT / WEBHOOK PHASE ===================================  |
+       |                               |                              |                         |
+  6.   |                               |<-- POST /payments/webhook ---| (Gateway retries / sends)
+       |                               |    {                         |                         |
+       |                               |      "event_id": "evt_101",  |--- BookingService ----->|
+       |                               |      "booking_id": 1,        |    .process_webhook()   |
+       |                               |      "status": "SUCCESS"     |                         |
+       |                               |    }                         |--- BookingRepository -->|
+       |                               |                              |    (Check event_id)     |
+       |                               |                              |    [NOT FOUND - FIRST RUN]
+       |                               |                              |    - Update -> CONFIRMED|
+       |                               |                              |    - Record Payment     |
+       |                               |                              |    - Insert WebhookEvent|
+       |                               |                              |<------------------------|
+       |                               |--- 200 OK (Processed) ------>|                         |
+       |                               |                              |                         |
+       |  ======================== DIAGNOSTIC LAB LIFECYCLE ==================================  |
+       |                               |                              |                         |
+  7.   | Phlebotomist collects sample  |--- PATCH /bookings/1/status  |                         |
+       |                               |    {"status": "SAMPLE_COLLECTED"}                      |
+       |                               |<-- 200 OK -------------------|                         |
+       |                               |                              |                         |
+  8.   | Lab processes test & generates|--- PATCH /bookings/1/status  |                         |
+       | test reports                  |    {"status": "REPORT_GENERATED"}                      |
+       |                               |<-- 200 OK -------------------|                         |
+       |                               |                              |                         |
+  9.   | Report delivered to patient   |--- PATCH /bookings/1/status  |                         |
+       |                               |    {"status": "COMPLETED"}   |                         |
+       |<-- Booking Flow Completed! ---|<-- 200 OK -------------------|                         |
+========================================================================================================
