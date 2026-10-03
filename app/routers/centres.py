@@ -5,8 +5,6 @@ from app.services.centre_service import CentreService
 
 router = APIRouter(prefix="/centres", tags=["Centres"])
 
-# Dependency Injection: FastAPI handles the lifecycle. 
-# It creates the service exactly once per request and safely garbage-collects it afterward.
 def get_centre_service(db: Session = Depends(get_db)) -> CentreService:
     return CentreService(db)
 

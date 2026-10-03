@@ -7,7 +7,6 @@ from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# Dependency Injection: Service is created once per request and GC'd immediately after.
 def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
     return AuthService(db)
 
