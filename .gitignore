@@ -1,17 +1,10 @@
-# Virtual environments
 venv/
 .venv/
-
-# Python bytecode & caches
 __pycache__/
 *.py[cod]
-*.pyc
-
-# Local SQLite databases & environment files
 *.db
+*.sqlite3
 .env
-
-# IDE & OS artifacts
+.env.*
 .idea/
-.vscode/
 .DS_Store
